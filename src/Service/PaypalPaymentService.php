@@ -38,6 +38,7 @@ use Adyen\Shopware\Service\Repository\SalesChannelRepository;
 use Exception;
 use JsonException;
 use Shopware\Core\Checkout\Cart\Cart;
+use Shopware\Core\Checkout\Cart\CartException;
 use Shopware\Core\Checkout\Cart\Order\IdStruct;
 use Shopware\Core\Checkout\Cart\Order\OrderConverter;
 use Shopware\Core\Checkout\Cart\SalesChannel\CartOrderRoute;
@@ -208,6 +209,14 @@ readonly class PaypalPaymentService
         SalesChannelContext $updatedContext,
         array $stateData = []
     ): array {
+        /** @var Cart $cart */
+        $cart = $cartData['cart'];
+
+        // Express PayPal authorizes the payment here (step 2) but creates the order, and
+        // thus runs the core block check, only on finalize (step 3). Reject a blocked cart
+        // now, before authorization, otherwise the late failure leaves an orphan payment.
+        $this->assertCartIsNotBlocked($cart);
+
         if ($context->getPaymentMethod()->getName() !== PaypalPaymentMethod::PAYPAL_PAYMENT_METHOD_NAME) {
             $this->expressCheckoutService->changeContext(
                 $updatedContext->getCustomerId(),
@@ -215,8 +224,6 @@ readonly class PaypalPaymentService
             );
         }
 
-        /** @var Cart $cart */
-        $cart = $cartData['cart'];
         $customer = $context->getCustomer();
 
         if ($customer && !$customer->getGuest()) {
@@ -263,6 +270,17 @@ readonly class PaypalPaymentService
         $response = $this->paymentRequestService->executePayment($context, $paymentRequest);
 
         return $response->toArray();
+    }
+
+    /**
+     * Mirrors the cart-block guard in Shopware's OrderPersister::persist(), so a blocked
+     * cart can be rejected before payment authorization instead of only at order creation.
+     */
+    private function assertCartIsNotBlocked(Cart $cart): void
+    {
+        if ($cart->getErrors()->blockOrder()) {
+            throw CartException::invalidCart($cart->getErrors());
+        }
     }
 
     /**

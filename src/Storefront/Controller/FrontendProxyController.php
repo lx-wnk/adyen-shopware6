@@ -191,20 +191,7 @@ class FrontendProxyController extends StorefrontController
 
             return new JsonResponse(['id' => $order->getId()]);
         } catch (InvalidCartException|Error|EmptyCartException) {
-            $this->addCartErrors(
-                $this->cartService->getCart($salesChannelContext->getToken(), $salesChannelContext)
-            );
-
-            return new JsonResponse(
-                [
-                    'url' => $this->generateUrl(
-                        'frontend.checkout.cart.page',
-                        [],
-                        UrlGeneratorInterface::ABSOLUTE_URL
-                    )
-                ],
-                400
-            );
+            return $this->createCartErrorRedirectResponse($salesChannelContext);
         }
     }
 
@@ -258,20 +245,7 @@ class FrontendProxyController extends StorefrontController
 
             return new JsonResponse(['id' => $order->getId()]);
         } catch (InvalidCartException|EmptyCartException|Error|Exception $exception) {
-            $this->addCartErrors(
-                $this->cartService->getCart($salesChannelContext->getToken(), $salesChannelContext)
-            );
-
-            return new JsonResponse(
-                [
-                    'url' => $this->generateUrl(
-                        'frontend.checkout.cart.page',
-                        [],
-                        UrlGeneratorInterface::ABSOLUTE_URL
-                    )
-                ],
-                400
-            );
+            return $this->createCartErrorRedirectResponse($salesChannelContext);
         }
     }
 
@@ -636,25 +610,31 @@ class FrontendProxyController extends StorefrontController
             return new JsonResponse(null, 401);
         }
 
-        $cartData = $this->expressCheckoutController->createCartForPayPalExpressCheckout(
-            $data,
-            $context
-        );
+        try {
+            $cartData = $this->expressCheckoutController->createCartForPayPalExpressCheckout(
+                $data,
+                $context
+            );
 
-        $cart = $cartData['cart'];
-        /** @var  SalesChannelContext $updatedSalesChannelContext */
-        $updatedSalesChannelContext = $cartData['updatedSalesChannelContext'];
-        $stateData = $request->get('stateData') ?? '';
-        $this->requestStack->getSession()->set('adyenCartToken', $cart->getToken());
+            $cart = $cartData['cart'];
+            /** @var  SalesChannelContext $updatedSalesChannelContext */
+            $updatedSalesChannelContext = $cartData['updatedSalesChannelContext'];
+            $stateData = $request->get('stateData') ?? '';
+            $this->requestStack->getSession()->set('adyenCartToken', $cart->getToken());
 
-        return new JsonResponse(
-            $this->paypalPaymentService->createPayPalExpressPaymentRequest(
-                $cartData,
-                $context,
-                $updatedSalesChannelContext,
-                json_decode($stateData, true)
-            )
-        );
+            return new JsonResponse(
+                $this->paypalPaymentService->createPayPalExpressPaymentRequest(
+                    $cartData,
+                    $context,
+                    $updatedSalesChannelContext,
+                    json_decode($stateData, true)
+                )
+            );
+        } catch (InvalidCartException $exception) {
+            // Thrown before payment authorization (see
+            // PaypalPaymentService::assertCartIsNotBlocked), so no orphan payment occurs.
+            return $this->createCartErrorRedirectResponse($context);
+        }
     }
 
     #[Route(
@@ -698,6 +678,24 @@ class FrontendProxyController extends StorefrontController
 
             return new JsonResponse(null, 400);
         }
+    }
+
+    private function createCartErrorRedirectResponse(SalesChannelContext $salesChannelContext): JsonResponse
+    {
+        $this->addCartErrors(
+            $this->cartService->getCart($salesChannelContext->getToken(), $salesChannelContext)
+        );
+
+        return new JsonResponse(
+            [
+                'url' => $this->generateUrl(
+                    'frontend.checkout.cart.page',
+                    [],
+                    UrlGeneratorInterface::ABSOLUTE_URL
+                )
+            ],
+            400
+        );
     }
 
     /**
